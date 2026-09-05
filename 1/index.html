@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Project 1</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="../style.css" />
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']]
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Project 1</h1>
+
+        <div class="section">
+            <h2>Project Overview</h2>
+            <p>Each digitized negative is a single tall grayscale image: the same scene shot through blue, green, and red filters and stacked top to bottom. Splitting it into thirds gives three grayscale channels that are almost, but not quite, in register. 
+            The camera moved slightly, or the plates shifted during scanning, so each channel needs to be nudged back into place before it means anything as color. Hence,we find the (x, y) shift that brings G and R into register with B, 
+            then stack the three as color channels. No two images need the same shift, so it has to be found automatically for every plate.</p>
+
+        </div>
+
+        <div class="section">
+            <h2>Single-scale search on the low-res JPEGs</h2>
+            <p>
+            The simplest approach is to try every whole pixel shift in a window. [&minus;15, 15] in both
+            x and y which is 961 candidates and keep whichever one makes the channel look most like the blue
+            reference. Two scoring functions do this well:
+            </p>
+            <div class="formula-box">
+                <span class="label">Normalized cross-correlation (used throughout this project)</span>
+                <div class="equation">
+                    \[
+                    \mathrm{NCC}(A, B)=\frac{(A-\mathrm{mean}(A))}{\|A-\mathrm{mean}(A)\|}\cdot\frac{(B-\mathrm{mean}(B))}{\|B-\mathrm{mean}(B)\|}
+                    \]
+                    <p>We take the shift that <strong>maximizes</strong> this.</p>
+                </div>
+            </div>
+            <div class="formula-box">
+                <span class="label">Euclidean / L2 distance (equivalent alternative)</span>
+                <div class="equation">
+                    \[
+                    \mathrm{L_2}(A, B)=\sqrt{\sum (A-B)^2}
+                    \]
+                </div>
+                <p>We take the shift that <strong>minimizes</strong> this.</p>
+            </div>
+            <p>
+            Before scoring, each candidate crop is trimmed by about 10% on every side. The scanned plates have
+            dark, uneven borders that have nothing to do with scene content, and without cropping them out the
+            search aligns the black edges instead of the picture.
+            </p>
+            <p>
+            This search is run directly at full resolution on the three JPEGs, no downsampling and
+            pyramid multi scaling so below is the single-scale result.
+            </p>
+
+            <p style="margin-top: 12px; margin-bottom: 10px; font-size: 0.92rem; color: #dd1111;">
+                <strong>Note:</strong> displacement tuples are reported as <em>(y, x)</em>, not <em>(x, y)</em>.
+            </p>
+
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/single_scale/cathedral_out.jpg" alt="cathedral aligned" style="max-width:320px;">
+                <figcaption>cathedral.jpg &mdash; G (5, 2), R (12, 3)</figcaption>
+            </figure>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/single_scale/tobolsk_out.jpg" alt="tobolsk aligned" style="max-width:320px;">
+                <figcaption>tobolsk.jpg &mdash; G (3, 3), R (6, 3)</figcaption>
+            </figure>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/single_scale/monastery_out.jpg" alt="monastery aligned" style="max-width:320px;">
+                <figcaption>monastery.jpg &mdash; G (&minus;3, 2), R (3, 2)</figcaption>
+            </figure>
+        </div>
+
+        <div class="section">
+            <h2>Multi-scale pyramid alignment on the full example set</h2>
+            <p>
+            The full-resolution <code>.tif</code> scans are roughly 90&times; the pixel count of the JPEGs, and their
+            true displacements are often larger than the &plusmn;15 window can find directly at full resolution.
+            A coarse-to-fine image pyramid solves both problems: downsample repeatedly until the image is a few
+            hundred pixels across, exhaustively search there with the same NCC/L2 metric, then walk back up the
+            pyramid, doubling the estimate and refining it with a small local search at each level. The same
+            pipeline, unmodified, was run on all fourteen example plates (the three JPEGs are included here too,
+            for completeness &mdash; their pyramid results are identical to the single-scale results above, since
+            an image this small only produces one pyramid level):
+            </p>
+
+            <p style="margin-top: 12px; margin-bottom: 10px; font-size: 0.92rem; color: #475569;">
+                <strong>Note:</strong> displacement tuples are reported as <em>(y, x)</em>, not <em>(x, y)</em>.
+            </p>
+            <div>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/cathedral_out.jpg" alt="cathedral aligned" style="max-width:220px;">
+                    <figcaption>cathedral.jpg</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/church_out.jpg" alt="church aligned" style="max-width:220px;">
+                    <figcaption>church.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/emir_out.jpg" alt="emir aligned" style="max-width:220px;">
+                    <figcaption>emir.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/harvesters_out.jpg" alt="harvesters aligned" style="max-width:220px;">
+                    <figcaption>harvesters.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/icon_out.jpg" alt="icon aligned" style="max-width:220px;">
+                    <figcaption>icon.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/ilemselga_out.jpg" alt="ilemselga aligned" style="max-width:220px;">
+                    <figcaption>ilemselga.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/melons_out.jpg" alt="melons aligned" style="max-width:220px;">
+                    <figcaption>melons.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/monastery_out.jpg" alt="monastery aligned" style="max-width:220px;">
+                    <figcaption>monastery.jpg</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/religous_painting_out.jpg" alt="religious painting aligned" style="max-width:220px;">
+                    <figcaption>religous_painting.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/self_portrait_out.jpg" alt="self portrait aligned" style="max-width:220px;">
+                    <figcaption>self_portrait.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/siren_out.jpg" alt="siren aligned" style="max-width:220px;">
+                    <figcaption>siren.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/three_generations_out.jpg" alt="three generations aligned" style="max-width:220px;">
+                    <figcaption>three_generations.tif</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/tobolsk_out.jpg" alt="tobolsk aligned" style="max-width:220px;">
+                    <figcaption>tobolsk.jpg</figcaption>
+                </figure>
+                <figure style="display:inline-block; margin:10px;">
+                    <img src="output/multi_scale/wharf_out.jpg" alt="wharf aligned" style="max-width:220px;">
+                    <figcaption>wharf.tif</figcaption>
+                </figure>
+            </div>
+
+            <table border="1" cellpadding="6" cellspacing="0" style="margin-top:16px; border-collapse:collapse;">
+                <thead>
+                    <tr><th>Plate</th><th>G displacement (y, x)</th><th>R displacement (y, x)</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>cathedral.jpg</td><td>(5, 2)</td><td>(12, 3)</td></tr>
+                    <tr><td>church.tif</td><td>(25, 4)</td><td>(58, &minus;4)</td></tr>
+                    <tr><td>emir.tif</td><td>(49, 24)</td><td>(107, 40)</td></tr>
+                    <tr><td>harvesters.tif</td><td>(60, 17)</td><td>(124, 14)</td></tr>
+                    <tr><td>icon.tif</td><td>(41, 17)</td><td>(89, 23)</td></tr>
+                    <tr><td>ilemselga.tif</td><td>(40, 7)</td><td>(130, 11)</td></tr>
+                    <tr><td>melons.tif</td><td>(82, 10)</td><td>(178, 13)</td></tr>
+                    <tr><td>monastery.jpg</td><td>(&minus;3, 2)</td><td>(3, 2)</td></tr>
+                    <tr><td>religous_painting.tif</td><td>(28, 3)</td><td>(68, 7)</td></tr>
+                    <tr><td>self_portrait.tif</td><td>(79, 29)</td><td>(176, 37)</td></tr>
+                    <tr><td>siren.tif</td><td>(49, &minus;6)</td><td>(96, &minus;25)</td></tr>
+                    <tr><td>three_generations.tif</td><td>(53, 14)</td><td>(112, 11)</td></tr>
+                    <tr><td>tobolsk.jpg</td><td>(3, 3)</td><td>(6, 3)</td></tr>
+                    <tr><td>wharf.tif</td><td>(15, &minus;7)</td><td>(83, &minus;16)</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>My own examples from the Prokudin-Gorskii collection</h2>
+            <p>
+            The same pipeline, run unmodified on four additional scans picked from the
+            <a href="https://www.loc.gov/collections/prokudin-gorskii/?st=grid" target="_blank">public Prokudin-Gorskii collection</a>.
+            </p>
+
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/multi_scale/master-pnp-prok-00000-00011a_out.jpg" alt="own example 1" style="max-width:260px;">
+                <figcaption>master-pnp-prok-00000-00011a.tif &mdash; G (19, 15), R (80, 38)</figcaption>
+            </figure>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/multi_scale/master-pnp-prok-00100-00163a_out.jpg" alt="own example 2" style="max-width:260px;">
+                <figcaption>master-pnp-prok-00100-00163a.tif &mdash; G (&minus;23, 8), R (&minus;34, 10)</figcaption>
+            </figure>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/multi_scale/master-pnp-prok-00200-00215a_out.jpg" alt="own example 3" style="max-width:260px;">
+                <figcaption>master-pnp-prok-00200-00215a.tif &mdash; G (41, &minus;16), R (93, &minus;29)</figcaption>
+            </figure>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/multi_scale/master-pnp-prok-00200-00220a_out.jpg" alt="own example 4" style="max-width:260px;">
+                <figcaption>master-pnp-prok-00200-00220a.tif &mdash; G (45, &minus;13), R (103, &minus;11)</figcaption>
+            </figure>
+        </div>
+
+        <div class="section">
+            <h2>Bells &amp; whistles: gradient-based matching for emir.tif</h2>
+            <p>
+            Raw-pixel NCC assumes matching content has matching brightness across channels. That assumption
+            breaks on saturated color: the emir's blue-and-gold robe is bright in blue, dim in red, so the red
+            channel's "brightest match" for the robe isn't near the robe at all. Running the pipeline on
+            <code>emir.tif</code> with raw-pixel NCC (the same metric used for every other plate) produced a
+            badly misaligned result &mdash; visible ghosting, two overlapping figures. Switching only this
+            image's scoring function from raw pixel intensity to Sobel gradient magnitude
+            (<code>sqrt(Sobel_x&sup2; + Sobel_y&sup2;)</code>) fixed it. Edges like the outline of a sleeve,
+            the border of a tile, the frame of a door, tend to show up in all three color channels even
+            when brightness doesn't, because an edge is a change in reflectance, not an absolute color. No other
+            part of the search or pyramid code changes; only what gets compared changes.
+            </p>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/emir_no_gradient_out.jpg" alt="emir aligned" style="max-width:220px;">
+                <figcaption>emir.tif WITHOUT gradient based matching &mdash; G (49, 24), R (417, -455)</figcaption>
+            </figure>
+            <figure style="display:inline-block; margin:10px;">
+                <img src="output/multi_scale/emir_out.jpg" alt="emir aligned" style="max-width:220px;">
+                <figcaption>emir.tif &mdash; G (49, 24), R (107, 40)</figcaption>
+            </figure>
+            <p>
+            This was necessary only for <code>emir.tif</code>. Every other plate, including the other
+            colorful ones (icon, siren, self_portrait), aligned cleanly under plain raw-pixel NCC.
+            </p>
+        </div>
+
+        <div class="section">
+            <h2>Failure cases</h2>
+            <p>
+            All eighteen plates above (fourteen provided examples plus four of my own) aligned cleanly with no
+            visible ghosting or doubled edges, once the gradient-based metric was applied to emir.tif. The one
+            situation this approach cannot fix is real motion between the three exposures &mdash; a person,
+            animal, or water moving while Prokudin-Gorskii shot the red, green, and blue plates seconds apart.
+            In that case the misalignment isn't a shift at all, it's a change in the scene itself, so no single
+            (x, y) translation can correct it. None of the images tested here showed enough motion for this to
+            be a problem.
+            </p>
+        </div>
+
+        <p>Back to <a href="../index.html">Portfolio</a></p>
+    </div>
+</body>
+</html>

@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+
+<title>Project 2: Fun with Filters and Frequencies</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h1>Project 2: Fun with Filters and Frequencies</h1>
+
+<hr>
+
+<h1>Part 1: Fun with Filters</h1>
+
+<div class = "section">
+<h2>Part 1.1: Convolutions from Scratch</h2>
+
+<p>
+A 2D convolution slides a flipped filter over an image and, at every position, takes the
+sum of the elementwise product between the filter and the overlapping image patch. I implemented
+it two ways: a naive version with four nested for-loops (two loops over the output pixel location,
+two loops over the filter taps), and a faster version with two nested for-loops (looping over the
+output location only, and computing the elementwise product/sum with a single numpy operation over
+the patch). Both implementations flip the kernel and zero-pad the input to support full and same output sizes.
+</p>
+
+<h3>Code</h3>
+<pre>
+def _pad_amounts(K, mode):
+    if mode == "full":
+        return K - 1, K - 1
+    if mode == "same":
+        s = (K - 1) // 2
+        return K - 1 - s, s
+    if mode == "valid":
+        return 0, 0
+
+def _prepare(img, kernel, mode):
+    kh, kw = kernel.shape
+    kflip = kernel[::-1, ::-1] # convolution flips the filter
+    pt, pb = _pad_amounts(kh, mode)
+    pl, pr = _pad_amounts(kw, mode)
+    padded = np.pad(img, ((pt, pb), (pl, pr)), mode="constant", constant_values=0)
+    oh, ow = padded.shape[0] - kh + 1, padded.shape[1] - kw + 1
+    return padded, kflip, oh, ow
+
+def conv2d_four_loops(img, kernel, mode="same"):
+    padded, kf, oh, ow = _prepare(img, kernel, mode)
+    kh, kw = kf.shape
+    out = np.zeros((oh, ow))
+    for i in range(oh):
+        for j in range(ow):
+            acc = 0.0
+            for u in range(kh):
+                for v in range(kw):
+                    acc += padded[i + u, j + v] * kf[u, v]
+            out[i, j] = acc
+    return out
+
+def conv2d_two_loops(img, kernel, mode="same"):
+    padded, kf, oh, ow = _prepare(img, kernel, mode)
+    kh, kw = kf.shape
+    out = np.zeros((oh, ow))
+    for i in range(oh):
+        for j in range(ow):
+            out[i, j] = np.sum(padded[i:i + kh, j:j + kw] * kf)
+    return out
+</pre>
+
+<h3>Verification against scipy.signal.convolve2d</h3>
+<p>
+I checked both implementations against <code>scipy.signal.convolve2d(a, k, mode=mode, boundary="fill",
+fillvalue=0)</code> on random inputs, for both odd and even sized kernels, and for "full" and "same"
+modes. Both my implementations matched scipy to floating point precision (max abs difference on the
+order of 1e-14).
+</p>
+
+<h3>Runtime and boundary handling comments</h3>
+<table border="1" cellpadding="6" cellspacing="0" style="margin-top:16px; border-collapse:collapse;">
+    <tr>
+        <th>Filter</th>
+        <th>4-loop</th>
+        <th>2-loop</th>
+        <th>scipy</th>
+    </tr>
+    <tr>
+        <td>box9x9</td>
+        <td>2.981s (err 1.3e-15)</td>
+        <td>0.595s (err 1.1e-15)</td>
+        <td>0.0190s</td>
+    </tr>
+    <tr>
+        <td>Dx</td>
+        <td>0.108s (err 0.0e+00)</td>
+        <td>0.470s (err 0.0e+00)</td>
+        <td>0.0010s</td>
+    </tr>
+    <tr>
+        <td>Dy</td>
+        <td>0.115s (err 0.0e+00)</td>
+        <td>0.511s (err 0.0e+00)</td>
+        <td>0.0034s</td>
+    </tr>
+</table>
+<p>
+The four-loop version is dramatically slower than the two-loop version because Python's interpreter
+overhead dominates when looping over every single filter tap individually; the two-loop version
+replaces the innermost two loops with a single vectorized numpy multiply and sum, which runs in
+compiled C. <code>scipy.signal.convolve2d</code> is faster still because the entire convolution
+runs in compiled/optimized code with no Python-level looping at all.
+</p>
+<p>
+For boundary handling, my implementation zero-pads the border,
+matching scipy's default <code>boundary="fill", fillvalue=0</code>. This is why both "same"
+and "full" outputs from my code matched scipy exactly.
+</p>
+
+<h3>Results: grayscale self-portrait convolved with a 9x9 box filter and finite differences</h3>
+<img src="output/1_1_gray.png" alt="original grayscale photo">
+<img src="output/1_1_box.png" alt="9x9 box blur">
+<img src="output/1_1_dx.png" alt="Dx finite difference">
+<img src="output/1_1_dy.png" alt="Dy finite difference">
+<img src="output/1_1_summary.png" alt="summary grid: original, box, Dx, Dy">
+</div>
+
+<div class = "section">
+<h2>Part 1.2: Finite Difference Operator</h2>
+<p>
+I convolved the cameraman image with the finite difference operators
+D<sub>x</sub> = [1, -1] and D<sub>y</sub> = [1, -1]<sup>T</sup>, then computed the gradient
+magnitude image as sqrt(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>). To get a binary
+edge map I thresholded the gradient magnitude.
+</p>
+<img src="output/1_2_dx.png" alt="partial derivative in x">
+<img src="output/1_2_dy.png" alt="partial derivative in y">
+<img src="output/1_2_mag.png" alt="gradient magnitude">
+<img src="output/1_2_edges.png" alt="binarized edge image">
+<img src="output/1_2_summary.png" alt="summary: original, dx, dy, magnitude, edges">
+
+<h3>Threshold justification</h3>
+<img src="output/1_2_threshold_sweep.png" alt="threshold sweep 0.05 to 0.3">
+<p>
+I swept the threshold across [0.05, 0.1, 0.15, 0.2, 0.3] (shown above) and picked
+<b>threshold = 0.15</b> because lower thresholds let through a lot of speckled
+noise in flat, low-contrast regions (the grass and background), while higher thresholds start to
+break up and erase real edges, like the fine outline of the cameraman's coat and the tripod legs.
+This value struck the best balance between suppressing noise and keeping all the real edges
+qualitatively visible.
+</p>
+</div>
+
+<div class = "section">
+<h2>Part 1.3: Derivative of Gaussian (DoG) Filter</h2>
+<p>
+The plain finite-difference edges above are noisy because differencing amplifies
+high-frequency noise. To fix this I first smoothed the image with a Gaussian filter
+(built via <code>cv2.getGaussianKernel</code> and an outer product with its transpose to
+get a 2D kernel) before taking the derivative.
+</p>
+<img src="output/1_3_gaussian_kernel.png" alt="2D gaussian kernel visualization">
+<img src="output/1_3_blur.png" alt="blurred cameraman">
+<img src="output/1_3_blur_dx.png" alt="blurred dx">
+<img src="output/1_3_blur_dy.png" alt="blurred dy">
+<img src="output/1_3_blur_mag.png" alt="blurred gradient magnitude">
+<img src="output/1_3_blur_edges.png" alt="blurred binarized edges">
+
+<h3>What differences do you see?</h3>
+<p>
+Blurring before differentiating removes the grainy noise in flat regions that
+plagued the plain finite-difference result in Part 1.2, at the small cost of slightly thicker,
+softer edges (fine detail gets smoothed away along with the noise). This let me use a lower,
+cleaner threshold (<b>threshold = 0.05</b>) without noise creeping back in.
+</p>
+
+<h3>Single-convolution DoG filters</h3>
+<p>
+Instead of blurring then differentiating (two convolutions), I built derivative-of-Gaussian
+filters by convolving the Gaussian kernel directly with D<sub>x</sub> and D<sub>y</sub> (one
+convolution total per direction):
+</p>
+<pre>
+G = gauss2d(sigma)
+DoGx = signal.convolve2d(G, Dx, mode="full")
+DoGy = signal.convolve2d(G, Dy, mode="full")
+</pre>
+<img src="output/1_3_DoGx.png" alt="DoG x filter visualized">
+<img src="output/1_3_DoGy.png" alt="DoG y filter visualized">
+<img src="output/1_3_dog_mag.png" alt="DoG gradient magnitude">
+<img src="output/1_3_dog_edges.png" alt="DoG binarized edges">
+<img src="output/1_3_summary.png" alt="full 1.3 summary grid">
+
+<h3>Verification</h3>
+<p>
+I verified that convolving with the DoG filters directly gives the same result (up to
+boundary effects at the very edge of the image) as blurring then differencing: the maximum
+absolute difference between the two gradient-magnitude images, measured away from the border,
+was on the order of 1e-15 which is effectively identical, as expected since convolution is
+associative: (I * G) * D = I * (G * D).
+</p>
+
+<hr>
+</div>
+
+<h1>Part 2: Fun with Frequencies!</h1>
+
+<div class = "section">
+<h2>Part 2.1: Image "Sharpening"</h2>
+<p>
+The Gaussian filter is a low-pass filter, so subtracting a Gaussian-blurred copy of an image
+from the original isolates its high frequencies. Unsharp masking adds some extra weight of
+those high frequencies back onto the original to make edges and fine detail pop more. This can
+be folded into a single convolution using one combined kernel:
+</p>
+<pre>
+def unsharp_kernel(sigma, alpha):
+    # (1+alpha)*impulse - alpha*Gaussian
+    G = gauss2d(sigma)
+    imp = np.zeros_like(G)
+    imp[G.shape[0]//2, G.shape[1]//2] = 1.0
+    return (1 + alpha) * imp - alpha * G
+</pre>
+<p>
+I verified that filtering the image with this single kernel gives the same result as computing
+<code>image + alpha * (image - blur(image))</code> directly, to floating point precision.
+</p>
+
+<h3>Taj Mahal</h3>
+<img src="input/taj.jpg" alt="original taj mahal, blurry">
+<img src="output/2_1_taj_blur.png" alt="taj gaussian blurred">
+<img src="output/2_1_taj_high.png" alt="taj high frequencies, amplified for visibility">
+<img src="output/2_1_taj_sharp_a0.5.png" alt="taj sharpened alpha 0.5">
+<img src="output/2_1_taj_sharp_a1.png" alt="taj sharpened alpha 1">
+<img src="output/2_1_taj_sharp_a2.png" alt="taj sharpened alpha 2">
+<img src="output/2_1_taj_sharp_a4.png" alt="taj sharpened alpha 4">
+<img src="output/2_1_taj_summary.png" alt="taj summary grid across alphas">
+
+<h3>My own image</h3>
+<img src="input/sharpen_extra.JPG" alt="my own blurry image, original">
+<img src="output/2_1_extra_blur.png" alt="my image blurred">
+<img src="output/2_1_extra_high.png" alt="my image high frequencies">
+<img src="output/2_1_extra_summary.png" alt="my image sharpening summary grid">
+
+<p>
+As alpha increases, edges get visibly crisper and more defined, but past a certain point
+(<b>alpha &gt; 2</b>) the result starts to show halo artifacts around strong
+edges and amplified sensor noise in flat areas, since unsharp masking cannot distinguish real
+detail from noise, it boosts the high-frequency content that is present.
+</p>
+
+<h3>Evaluation: blur a sharp image, then re-sharpen it</h3>
+<img src="output/2_1_eval.png" alt="sharp original, blurred, re-sharpened comparison">
+<p>
+The blurred image had a PSNR of <b>31.97 dB</b> relative to the original, while the
+re-sharpened image reached <b>36.14 dB</b>. Re-sharpening a blurred image visibly increases
+edge contrast and makes it look subjectively crisper, and it raised PSNR back up relative to the untouched blurred version, but it did not recover the
+original image: high frequencies removed by blurring are genuinely gone. The Gaussian
+low-pass filter is not invertible. So unsharp masking can only exaggerate whatever residual
+high-frequency content survived the blur, it cannot reconstruct detail that was
+destroyed. The re-sharpened image still looks noticeably softer than the true original when
+compared side by side.
+</p>
+</div>
+
+<div class = "section">
+<h2>Part 2.2: Hybrid Images</h2>
+<p>
+Following Oliva, Torralba, and Schyns (SIGGRAPH 2006), I built hybrid images by combining the
+low frequencies of one image with the high frequencies of another. The low-pass component
+uses a Gaussian blur; the high-pass component is the impulse filter minus a
+Gaussian (i.e. image minus its own Gaussian blur). I aligned each pair of images first using
+the provided starter alignment code, clicking two corresponding points (e.g. the eyes) on each
+image so the two faces/objects are the same scale, rotation, and position before combining.
+</p>
+<pre>
+def make_hybrid(im_low, im_high, sigma_low, sigma_high, color="none"):
+    def prep(im, keep):
+        return im if keep else np.stack([to_gray(im)] * 3, axis=-1)
+    a = prep(im_low, color in ("low", "both"))
+    b = prep(im_high, color in ("high", "both"))
+    low = apply_filter(a, gauss2d(sigma_low))
+    high = b - apply_filter(b, gauss2d(sigma_high))   # impulse - Gaussian
+    return np.clip(low + high, 0, 1), low, high
+</pre>
+
+<h3>Example 1: Derek + Nutmeg</h3>
+<img src="output/2_2_derek_nutmeg_in_low.png" alt="nutmeg, low frequency source, aligned">
+<img src="output/2_2_derek_nutmeg_in_high_aligned.png" alt="derek, high frequency source, aligned">
+<img src="output/2_2_derek_nutmeg_hybrid.png" alt="derek nutmeg hybrid result">
+<img src="output/2_2_derek_nutmeg_scales.png" alt="hybrid viewed at decreasing scales/simulated distance">
+
+<p>
+I chose sigma_low = 6 (cutoff around 0.0265 cycles/pixel) for the low-pass filter and
+sigma_high = 4 (cutoff around 0.0398 cycles/pixel) for the high-pass filter. Too
+small a sigma_low lets too much high-frequency detail from the low-freq image bleed through
+and clutter the impression. Likewise, too large a sigma_high leaves too little detail from
+the high-freq image visible up close.
+</p>
+
+<h3>Example 2 (full process shown)</h3>
+<img src="input/hybrid_1_2.jpg" alt="hybrid 2 high frequency source, original">
+<img src="input/hybrid_1_1.png" alt="hybrid 2 low frequency source, original">
+<img src="output/2_2_hybrid1_fft.png" alt="log magnitude fourier transforms of both inputs, both filtered results, and the hybrid">
+<img src="output/2_2_hybrid1_process_images.png" alt="process: low source, high source, low-pass result, high-pass result, hybrid">
+<img src="output/2_2_hybrid1_hybrid.png" alt="hybrid 2 result">
+
+<h3>Example 3</h3>
+<img src="input/hybrid_3_2.jpg" alt="hybrid 3 high frequency source, original">
+<img src="input/hybrid_3_3.jpg" alt="hybrid 3 low frequency source, original">
+<img src="output/2_2_hybrid2_hybrid.png" alt="hybrid 3 result">
+</div>
+
+<div class = "section">
+<h2>Part 2.3: Gaussian and Laplacian Stacks</h2>
+<p>
+A stack behaves like a pyramid but is NOT downsampled. Every level stays at the
+original resolution. To build the Gaussian stack I repeatedly blurred the previous level with
+a Gaussian filter, doubling sigma at each level so it mimics the effective blur of a pyramid
+that would have halved its resolution at every step. The Laplacian stack is the differences
+between consecutive Gaussian stack levels, with the final (coarsest) level kept as is so that
+summing the whole Laplacian stack exactly reconstructs the original image.
+</p>
+<pre>
+def gaussian_stack(im, levels, sigma0):
+    st = [im]
+    for k in range(1, levels):
+        st.append(apply_filter(st[-1], gauss2d(sigma0 * 2 ** (k - 1))))
+    return st
+
+def laplacian_stack(gs):
+    return [gs[i] - gs[i + 1] for i in range(len(gs) - 1)] + [gs[-1]]
+</pre>
+<h3>Apple</h3>
+<img src = "output/2_3_apple_stacks.png" alt="apple gaussian and laplacian stack levels">
+
+<h3>Orange</h3>
+<img src="output/2_3_orange_stacks.png" alt="orange gaussian and laplacian stack levels">
+
+<h3>Recreating Figure 3.42</h3>
+<img src="output/2_3_figure_3_42_recreation.png" alt="12 panel recreation of figure 3.42, apple orange blend process">
+<img src="output/2_3_splice.png" alt="naive hard splice of apple and orange for comparison">
+<img src="output/2_3_oraple.png" alt="the oraple, multiresolution blended">
+<p>
+The naive hard splice above shows a harsh and artificial seam down the middle. Whereas
+the multiresolution blended oraple shows a smooth, gradual transition. Because each
+frequency band was blended with its own appropriately blurred version of the mask, so
+low-frequency (color/shading) content blends over a wide region while high-frequency (texture/
+edge) content blends over a narrow region right at the seam.
+</p>
+</div>
+
+<div class = "section">
+<h2>Part 2.4: Multiresolution Blending (oraple)</h2>
+<p>
+I followed the algorithm on page 230 of the Burt &amp; Adelson paper exactly: build Laplacian
+stacks LA, LB for the two images, build a Gaussian stack GR for the region/mask image, then
+combine each level as LS = GR&middot;LA + (1-GR)&middot;LB, and sum every level of LS to get the
+final blended result. The mask itself is a step function (all 1s on one side, all 0s on the
+other) matching the size of the input images for the straight vertical/horizontal seam case.
+</p>
+<pre>
+def blend(a, b, mask, levels, sigma0):
+    la = laplacian_stack(gaussian_stack(a, levels, sigma0))
+    lb = laplacian_stack(gaussian_stack(b, levels, sigma0))
+    gm = gaussian_stack(mask, levels, sigma0)
+    parts = [la[i] * gm[i] + lb[i] * (1 - gm[i]) for i in range(levels)]
+    return np.clip(sum(parts), 0, 1), la, lb, gm, parts
+</pre>
+
+<h3>The oraple (vertical seam)</h3>
+<img src="output/2_4_oraple_summary.png" alt="apple, orange, mask, and final oraple side by side">
+
+<h3>Custom blend 1 (Sun & Moon)</h3>
+<img src="input/hybrid_3_2 copy.jpg" alt="custom blend 1, image A, original">
+<img src="input/hybrid_3_3 copy.jpg" alt="custom blend 1, image B, original">
+<img src="output/2_4_custom1.png" alt="custom blend 1: A, B, mask, blended result">
+<img src="output/2_4_custom1_summary.png" alt="custom blend 1: A, B, mask, blended result">
+<img src="output/2_4_custom1_process.png" alt="custom blend 1 laplacian stack process illustration">
+
+<h3>Custom blend 2 (irregular mask, Albert Einstein Young & Old)</h3>
+<img src="input/hybrid_1_1.png" alt="custom blend 2, image A, original">
+<img src="input/blend.jpeg" alt="custom blend 2, image B, original">
+<img src="output/2_4_custom2_irregular.png" alt="custom blend 2 with irregular elliptical mask: A, B, mask, blended result">
+<img src="output/2_4_custom2_irregular_summary.png" alt="custom blend 2 with irregular elliptical mask: A, B, mask, blended result">
+<img src="output/2_4_custom2_irregular_process.png" alt="custom blend 2 laplacian stack process illustration">
+<p>
+For this blend I used an irregular, elliptical mask rather than a straight seam, similar to
+Figure 8 in the Burt &amp; Adelson paper, to embed one image inside a region of the other rather
+than splicing them side by side.
+</p>
+</div>
+
+
+<hr>
+<h2>What I learned</h2>
+<p>
+I learnt how frequency handling and filtering can be used to manipulate images in a variety of ways, from edge detection to sharpening and blending. 
+The Gaussian and Laplacian stacks provide a powerful framework for multiresolution analysis, allowing for smooth transitions between images. 
+The concept of multiresolution decomposition connects blurring, sharpening, hybrid images, and multiresolution blending as
+different applications of the same concept.
+</p>
+
+<p>Back to <a href="../index.html">Portfolio</a></p>
+
+<script>
+const wideImageTerms = ["summary", "process", "stack", "recreation", "comparison", "scales", "fourier", "threshold sweep"];
+
+document.querySelectorAll(".section > img").forEach((image) => {
+    const figure = document.createElement("figure");
+    const isWide = wideImageTerms.some((term) => image.alt.toLowerCase().includes(term));
+    const imagePath = image.getAttribute("src") || "";
+    const isBlendSummary = /(?:oraple|custom1|custom2_irregular)_summary\.png$/.test(imagePath);
+    figure.className = isBlendSummary ? "wide-image blend-summary" : (isWide ? "wide-image" : "image-card");
+    image.parentNode.insertBefore(figure, image);
+    figure.appendChild(image);
+
+    const caption = document.createElement("figcaption");
+    caption.textContent = image.alt;
+    figure.appendChild(caption);
+});
+</script>
+
+</body>
+</html>

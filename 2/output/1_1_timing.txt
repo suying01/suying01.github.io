@@ -1,0 +1,3 @@
+box9x9: 4-loop 2.981s (err 1.3e-15) | 2-loop 0.595s (err 1.1e-15) | scipy 0.0190s
+Dx: 4-loop 0.108s (err 0.0e+00) | 2-loop 0.470s (err 0.0e+00) | scipy 0.0010s
+Dy: 4-loop 0.115s (err 0.0e+00) | 2-loop 0.511s (err 0.0e+00) | scipy 0.0034s

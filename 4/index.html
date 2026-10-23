@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project 3A: Image Warping and Mosaicing</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h1>Project 3A: Image Warping and Mosaicing</h1>
+
+<nav class="toc">
+    <a href="#a1">A.1 Shoot the Pictures</a>
+    <a href="#a2">A.2 Recover Homographies</a>
+    <a href="#a3">A.3 Warp the Images</a>
+    <a href="#a4">A.4 Blend into a Mosaic</a>
+</nav>
+
+<p>
+    In this project I took photographs and stitched them into image mosaics. The pipeline includes:
+    clicking point correspondences between images, recovering the projective transformation (homography)
+    between them with least squares, inverse-warping the images into a common frame with my own
+    nearest-neighbor and bilinear interpolation, and blend the overlapping regions to reduce visible
+    seams. The same warping code is also used to rectify photos of rectangular
+    objects.
+</p>
+
+<!-- ===================================================================== -->
+<h2 id="a1">A.1: Shoot the Pictures</h2>
+
+<div class="section">
+    <p>
+        For each mosaic I stood in one spot and only rotated the phone, keeping the center of
+        projection fixed so that the images are related by a pure projective transformation.
+        Neighboring shots overlap by roughly 40&ndash;70%. I also used the main 1x lens and tried to 
+        keep the camera steady and at the same height.
+    </p>
+
+    <h3>Mosaic 1 source images: The Streets</h3>
+    <figure>
+        <img src="input/m1_left.jpg" alt="Mosaic 1 left">
+        <figcaption>Left</figcaption>
+    </figure><figure>
+        <img src="input/m1_mid.jpg" alt="Mosaic 1 middle">
+        <figcaption>Middle (reference)</figcaption>
+    </figure><figure>
+        <img src="input/m1_right.jpg" alt="Mosaic 1 right">
+        <figcaption>Right</figcaption>
+    </figure>
+
+    <h3>Mosaic 2 source images: Ihouse</h3>
+    <figure>
+        <img src="input/m2_left.jpg" alt="Mosaic 2 left">
+        <figcaption>Left</figcaption>
+    </figure><figure>
+        <img src="input/m2_mid.jpg" alt="Mosaic 2 middle">
+        <figcaption>Middle (reference)</figcaption>
+    </figure><figure>
+        <img src="input/m2_right.jpg" alt="Mosaic 2 right">
+        <figcaption>Right</figcaption>
+    </figure>
+
+    <h3>Mosaic 3 source images: Patio</h3>
+    <figure>
+        <img src="input/m3_left.jpg" alt="Mosaic 3 left">
+        <figcaption>Left</figcaption>
+    </figure><figure>
+        <img src="input/m3_mid.jpg" alt="Mosaic 3 middle">
+        <figcaption>Middle (reference)</figcaption>
+    </figure><figure>
+        <img src="input/m3_right.jpg" alt="Mosaic 3 right">
+        <figcaption>Right</figcaption>
+    </figure>
+
+    <h3>Rectification images</h3>
+    <p>
+        For rectification, each example is a single photo of an object that is rectangular,
+        taken at an angle so it appears as a slanted quadrilateral.
+    </p>
+    <figure>
+        <img src="input/rect1.jpg" alt="Rectification input 1">
+        <figcaption>Adidas Shoebox</figcaption>
+    </figure><figure>
+        <img src="input/rect2.jpg" alt="Rectification input 2">
+        <figcaption>Window</figcaption>
+    </figure>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="a2">A.2: Recover Homographies</h2>
+
+<div class="section">
+    <p>
+        A homography maps a point <code>p = (x, y, 1)</code> in one image to
+        <code>p' = Hp</code> in the other, where <code>H</code> is a 3&times;3 matrix with 8 degrees
+        of freedom (I fixed <code>h<sub>33</sub> = 1</code>). Writing it out and dividing by the third
+        coordinate:
+    </p>
+<pre>
+x' = (h11 x + h12 y + h13) / (h31 x + h32 y + 1)
+y' = (h21 x + h22 y + h23) / (h31 x + h32 y + 1)
+</pre>
+    <p>
+        Multiplying through by the denominator makes each equation linear in the unknowns
+        <code>h = [h11 h12 h13 h21 h22 h23 h31 h32]<sup>T</sup></code>, so every correspondence
+        contributes two rows to a system <code>Ah = b</code>:
+    </p>
+<pre>
+[ x  y  1  0  0  0  -x·x'  -y·x' ] h = x'
+[ 0  0  0  x  y  1  -x·y'  -y·y' ] h = y'
+</pre>
+    <p>
+        Four correspondences give exactly 8 equations, but then a couple of pixels of clicking error
+        can change <code>H</code> drastically. I instead click 8&ndash;9 correspondences per pair,
+        spread across the overlap, and solve the overdetermined system with least squares
+        (<code>np.linalg.lstsq</code>). Before solving, I apply Hartley normalization: each point set
+        is translated so its centroid is at the origin and scaled so its mean distance from it is
+        &radic;2. This makes the columns of <code>A</code> similar in magnitude (raw pixel values
+        and their products can differ by six orders of magnitude), which makes the least-squares
+        solve numerically stable. The solution is then denormalized:
+        <code>H = T<sub>2</sub><sup>-1</sup> H<sub>n</sub> T<sub>1</sub></code>.
+
+    </p>
+
+    <h3>Correspondences</h3>
+    <figure class="wide-image">
+        <img src="results/mosaic1/correspondences_m1_left.png" alt="Correspondences mosaic 1 left-middle">
+        <figcaption>Mosaic 1: left &harr; middle correspondences</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/mosaic1/correspondences_m1_right.png" alt="Correspondences mosaic 1 right-middle">
+        <figcaption>Mosaic 1: right &harr; middle correspondences</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/mosaic2/correspondences_m2_left.png" alt="Correspondences mosaic 2 left-middle">
+        <figcaption>Mosaic 2: left &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/mosaic2/correspondences_m2_right.png" alt="Correspondences mosaic 2 right-middle">
+        <figcaption>Mosaic 2: right &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/mosaic3/correspondences_m3_left.png" alt="Correspondences mosaic 3 left-middle">
+        <figcaption>Mosaic 3: left &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/mosaic3/correspondences_m3_right.png" alt="Correspondences mosaic 3 right-middle">
+        <figcaption>Mosaic 3: right &harr; middle</figcaption>
+    </figure>
+
+    <h3>System of equations and recovered homography (Mosaic 1, left &rarr; middle)</h3>
+    <p>
+        The full system for this pair, in pixel coordinates
+        (from <code>results/mosaic1/H_m1_left.txt</code>):
+    </p>
+<pre>
+A =
+[[     323.29       318.981        1.           0.           0.           0.      -58484.736   -57705.158]
+ [       0.           0.           0.         323.29       318.981        1.      -96405.452   -95120.405]
+ [     512.9        272.227        1.           0.           0.           0.     -194034.035  -102985.634]
+ [       0.           0.           0.         512.9        272.227        1.     -134296.599   -71279.353]
+ [     834.978      308.591        1.           0.           0.           0.     -571793.93   -211323.382]
+ [       0.           0.           0.         834.978      308.591        1.     -259835.443   -96029.884]
+ [     580.433      669.63         1.           0.           0.           0.     -252749.661  -291590.604]
+ [       0.           0.           0.         580.433      669.63         1.     -381136.989  -439707.671]
+ [     681.731      898.201        1.           0.           0.           0.     -365918.728  -482108.752]
+ [       0.           0.           0.         681.731      898.201        1.     -596395.455  -785768.66 ]
+ [     497.316      835.864        1.           0.           0.           0.     -175221.039  -294502.786]
+ [       0.           0.           0.         497.316      835.864        1.     -410521.293  -689983.721]
+ [     845.368      602.097        1.           0.           0.           0.     -583300.267  -415444.72 ]
+ [       0.           0.           0.         845.368      602.097        1.     -502406.456  -357829.614]
+ [     364.848      498.201        1.           0.           0.           0.      -82113.049  -112125.584]
+ [       0.           0.           0.         364.848      498.201        1.     -176081.944  -240440.358]
+ [     453.16      1147.552        1.           0.           0.           0.     -136122.676  -344707.941]
+ [       0.           0.           0.         453.16      1147.552        1.     -510608.302 -1293030.238]]
+
+
+b = [ 180.905  298.201  378.308  261.838  684.801  311.188  435.45   656.643  536.749  874.825  352.334  825.474  689.996  594.305  225.061  482.617  300.385 1126.773]
+</pre>
+    <p>Recovered homography:</p>
+<pre>
+Recovered H =
+[[   1.143   -0.011 -174.959]
+ [   0.097    1.09   -64.06 ]
+ [   0.       0.       1.   ]]
+</pre>
+    <p>
+        The mean reprojection error (distance between <code>H&nbsp;p</code> and the clicked
+        <code>p'</code>) is 2.738px, with a maximum of
+        5.623px. The mean is fairly low, but the largest error suggests that click should be
+        reviewed.
+    </p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="a3">A.3: Warp the Images</h2>
+
+<div class="section">
+    <h3>Inverse warping</h3>
+    <p>
+        <code>warpImageNearestNeighbor(im, H)</code> and <code>warpImageBilinear(im, H)</code> both
+        use <strong>inverse warping</strong>. First, the four image corners are pushed through
+        <code>H</code> to find the bounding box of the output. Then, for every pixel in that box, I
+        apply <code>H<sup>-1</sup></code> to find where it came from in the source image and sample
+        the source there. Because every output pixel is visited exactly once, there are no holes
+        as compared to forward warping. Output pixels whose
+        source location falls outside the input image are marked 0 in an <strong>alpha mask</strong>,
+        which is later used for blending. I use the convention that <code>(0,0)</code> is the
+        <em>center</em> of the top-left pixel. The whole computation is vectorized with NumPy and
+        processed in row chunks to keep memory bounded.
+    </p>
+    <ul>
+        <li><strong>Nearest neighbor:</strong> round the source coordinate to the closest pixel and copy its value.</li>
+        <li><strong>Bilinear:</strong> take the four surrounding pixels and blend them with weights
+            <code>(1&minus;dx)(1&minus;dy)</code>, <code>dx(1&minus;dy)</code>,
+            <code>(1&minus;dx)dy</code>, <code>dx·dy</code>, where <code>dx, dy</code> are the
+            fractional offsets.</li>
+    </ul>
+
+    <h3>Rectification</h3>
+    <p>
+        To test the warp, I rectified photos of known rectangular objects. I clicked the four
+        corners (top-left, top-right, bottom-right, bottom-left) and mapped them to a hand-defined
+        rectangle with the object's real aspect ratio, then warped the whole image with that
+        homography.
+    </p>
+
+    <h3>Example 1: Adidas Shoebox</h3>
+    <p>Recovered homography:</p>
+    <pre>
+    Recovered H =
+    [[   1.335   -0.231   29.006]
+    [  -0.169    0.817 -706.806]
+    [   0.001   -0.       1.   ]]
+    </pre>
+    <figure>
+        <img src="results/rect1/points.png" alt="Rectification 1 selected corners">
+        <figcaption>Input with selected corners</figcaption>
+    </figure><figure>
+        <img src="results/rect1/rectified_nn_cropped.png" alt="Rectification 1 nearest neighbor">
+        <figcaption>Rectified: nearest neighbor</figcaption>
+    </figure><figure>
+        <img src="results/rect1/rectified_bilinear_cropped.png" alt="Rectification 1 bilinear">
+        <figcaption>Rectified: bilinear</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/rect1/rectified_bilinear.png" alt="Rectification 1 with context">
+        <figcaption>Rectified with surrounding context (bilinear)</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/rect1/zoom_comparison.png" alt="Rectification 1 zoomed comparison">
+        <figcaption>Zoomed crop: nearest neighbor (left) vs bilinear (right)</figcaption>
+    </figure>
+
+    <h3>Example 2: Window</h3>
+    <p>Recovered homography:</p>
+    <pre>
+    Recovered H =
+    [[   1.346   -0.058 -272.85 ]
+    [   0.117    1.333 -870.981]
+    [   0.001   -0.       1.   ]]
+    </pre>
+    <figure>
+        <img src="results/rect2/points.png" alt="Rectification 2 selected corners">
+        <figcaption>Input with selected corners</figcaption>
+    </figure><figure>
+        <img src="results/rect2/rectified_nn_cropped.png" alt="Rectification 2 nearest neighbor">
+        <figcaption>Rectified: nearest neighbor</figcaption>
+    </figure><figure>
+        <img src="results/rect2/rectified_bilinear_cropped.png" alt="Rectification 2 bilinear">
+        <figcaption>Rectified: bilinear</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/rect2/rectified_bilinear.png" alt="Rectification 2 with context">
+        <figcaption>Rectified with surrounding context (bilinear)</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results/rect2/zoom_comparison.png" alt="Rectification 2 zoomed comparison">
+        <figcaption>Zoomed crop: nearest neighbor (left) vs bilinear (right)</figcaption>
+    </figure>
+
+    <h3>Nearest neighbor vs bilinear: speed and quality</h3>
+    <table>
+        <thead>
+            <tr><th>Image</th><th>Output size</th><th>Nearest neighbor</th><th>Bilinear</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Example 1</td><td>1461x450</td><td>0.046s</td><td>0.086s</td></tr>
+            <tr><td>Example 2</td><td>1039x1250</td><td>0.049s</td><td>0.142s</td></tr>
+        </tbody>
+    </table>
+    <p class="table-note">Timings from <code>results/rect*/timing.txt</code>.</p>
+    <p>
+        <strong>Quality:</strong> nearest neighbor copies one source pixel per output pixel, so
+        wherever the image is magnified or rotated, edges become jagged and stair-stepped and
+        texture looks blocky. This is most visible on the stretched far side of the object and on
+        diagonal edges in the zoomed crops. Bilinear interpolation blends the four surrounding
+        pixels, producing smooth edges and gradients. Its only visual cost is a slight softening of
+        fine detail, since averaging acts as a small low-pass filter.
+    </p>
+    <p>
+        <strong>Speed:</strong> nearest neighbor needs one lookup per output pixel, while bilinear
+        needs four lookups plus the weight computation. In these runs bilinear took about
+        1.9&times; as long for Example 1 and 2.9&times; for Example 2. Both are dominated by the
+        shared cost of applying <code>H<sup>-1</sup></code> to every pixel, so the gap is smaller
+        than 4&times;.
+    </p>
+    <p>
+        <strong>Trade-off:</strong> nearest neighbor is good enough for quick previews or when speed
+        matters (e.g. video). For final results the small extra time for bilinear is worth it,
+        so I use bilinear for all the mosaics.
+    </p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="a4">A.4: Blend the Images into a Mosaic</h2>
+
+<div class="section">
+    <h3>Procedure</h3>
+    <ol>
+        <li><strong>Reference frame.</strong> I leave the middle image unwarped and warp the others
+            into its projection. Using the middle image as the reference spreads the perspective
+            distortion evenly to both sides.</li>
+        <li><strong>Homographies.</strong> For each side image I compute <code>H</code> mapping it
+            to the reference from 8&ndash;15 clicked correspondences (A.2).</li>
+        <li><strong>Canvas size.</strong> I push every image's four corners through its
+            <code>H</code> and take the bounding box of all of them, so the final mosaic size is
+            known in advance (one-shot procedure).</li>
+        <li><strong>Warping.</strong> Every image is inverse-warped with bilinear interpolation into
+            that shared canvas, giving a stack of aligned images, each with its own alpha mask.</li>
+        <li><strong>Feather weights.</strong> Each image gets a weight map from the distance
+            transform (<code>bwdist</code>): 1 at the image center, falling off to 0 at its edges.
+            The weight map is warped together with the image, as an extra channel, so it lives in
+            the mosaic frame.</li>
+        <li><strong>Blending: 2-level Laplacian pyramid.</strong> Plain weighted averaging
+            (feathering) removes hard seams but blurs or "ghosts" fine detail wherever two images
+            are slightly misaligned. So I split each warped image into a low-frequency band (Gaussian
+            blur, &sigma; = 3, normalized by the alpha mask so the black border doesn't bleed in)
+            and a high-frequency band (image minus low band).
+            <ul>
+                <li>The <strong>low bands</strong> are combined with the feathered weighted average,
+                    giving smooth color and exposure transitions.</li>
+                <li>The <strong>high bands</strong> are not averaged. At each pixel I take them from the
+                    image with the largest weight, which keeps edges and texture sharp and avoids
+                    ghosting.</li>
+            </ul>
+            The final mosaic is the sum of the two blended bands.</li>
+    </ol>
+    <p>
+        For comparison, each mosaic is also shown with naive overwriting (later images simply cover
+        earlier ones) and with plain feathering.
+    </p>
+
+    <!-- ---------------- Mosaic 1 ---------------- -->
+    <h3>Mosaic 1: The Streets</h3>
+    <figure>
+        <img src="input/m1_left.jpg" alt="Mosaic 1 left source">
+        <figcaption>Source: left</figcaption>
+    </figure><figure>
+        <img src="input/m1_mid.jpg" alt="Mosaic 1 middle source">
+        <figcaption>Source: middle (reference)</figcaption>
+    </figure><figure>
+        <img src="input/m1_right.jpg" alt="Mosaic 1 right source">
+        <figcaption>Source: right</figcaption>
+    </figure>
+    <figure>
+        <img src="results/mosaic1/warped_m1_left.png" alt="Mosaic 1 left warped">
+        <figcaption>Left, warped into the reference frame</figcaption>
+    </figure><figure>
+        <img src="results/mosaic1/warped_m1_mid.png" alt="Mosaic 1 middle on canvas">
+        <figcaption>Middle, placed on the canvas</figcaption>
+    </figure><figure>
+        <img src="results/mosaic1/warped_m1_right.png" alt="Mosaic 1 right warped">
+        <figcaption>Right, warped into the reference frame</figcaption>
+    </figure>
+    <figure class="mosaic-comparison">
+        <img src="results/mosaic1/mosaic_overwrite.png" alt="Mosaic 1 overwrite">
+        <figcaption>Naive overwrite: hard seams</figcaption>
+    </figure><figure class="mosaic-comparison">
+        <img src="results/mosaic1/mosaic_feather.png" alt="Mosaic 1 feather">
+        <figcaption>Feathering (weighted average)</figcaption>
+    </figure><figure class="mosaic-comparison">
+        <img src="results/mosaic1/mosaic_twoband.png" alt="Mosaic 1 two-band">
+        <figcaption>2-level Laplacian blend</figcaption>
+    </figure>
+    <figure class="blend-summary">
+        <img src="results/mosaic1/mosaic_twoband.png" alt="Mosaic 1 final">
+        <figcaption>Final mosaic 1</figcaption>
+    </figure>
+
+    <!-- ---------------- Mosaic 2 ---------------- -->
+    <h3>Mosaic 2: Ihouse</h3>
+    <figure>
+        <img src="input/m2_left.jpg" alt="Mosaic 2 left source">
+        <figcaption>Source: left</figcaption>
+    </figure><figure>
+        <img src="input/m2_mid.jpg" alt="Mosaic 2 middle source">
+        <figcaption>Source: middle (reference)</figcaption>
+    </figure><figure>
+        <img src="input/m2_right.jpg" alt="Mosaic 2 right source">
+        <figcaption>Source: right</figcaption>
+    </figure>
+    <figure>
+        <img src="results/mosaic2/warped_m2_left.png" alt="Mosaic 2 left warped">
+        <figcaption>Left, warped into the reference frame</figcaption>
+    </figure><figure>
+        <img src="results/mosaic2/warped_m2_mid.png" alt="Mosaic 2 middle on canvas">
+        <figcaption>Middle, placed on the canvas</figcaption>
+    </figure><figure>
+        <img src="results/mosaic2/warped_m2_right.png" alt="Mosaic 2 right warped">
+        <figcaption>Right, warped into the reference frame</figcaption>
+    </figure>
+    <figure class="mosaic-comparison">
+        <img src="results/mosaic2/mosaic_overwrite.png" alt="Mosaic 2 overwrite">
+        <figcaption>Naive overwrite: hard seams</figcaption>
+    </figure><figure class="mosaic-comparison">
+        <img src="results/mosaic2/mosaic_feather.png" alt="Mosaic 2 feather">
+        <figcaption>Feathering (weighted average)</figcaption>
+    </figure><figure class="mosaic-comparison">
+        <img src="results/mosaic2/mosaic_twoband.png" alt="Mosaic 2 two-band">
+        <figcaption>2-level Laplacian blend</figcaption>
+    </figure>
+    <figure class="blend-summary">
+        <img src="results/mosaic2/mosaic_twoband.png" alt="Mosaic 2 final">
+        <figcaption>Final mosaic 2</figcaption>
+    </figure>
+
+    <!-- ---------------- Mosaic 3 ---------------- -->
+    <h3>Mosaic 3: Patio</h3>
+    <figure>
+        <img src="input/m3_left.jpg" alt="Mosaic 3 left source">
+        <figcaption>Source: left</figcaption>
+    </figure><figure>
+        <img src="input/m3_mid.jpg" alt="Mosaic 3 middle source">
+        <figcaption>Source: middle (reference)</figcaption>
+    </figure><figure>
+        <img src="input/m3_right.jpg" alt="Mosaic 3 right source">
+        <figcaption>Source: right</figcaption>
+    </figure>
+    <figure>
+        <img src="results/mosaic3/warped_m3_left.png" alt="Mosaic 3 left warped">
+        <figcaption>Left, warped into the reference frame</figcaption>
+    </figure><figure>
+        <img src="results/mosaic3/warped_m3_mid.png" alt="Mosaic 3 middle on canvas">
+        <figcaption>Middle, placed on the canvas</figcaption>
+    </figure><figure>
+        <img src="results/mosaic3/warped_m3_right.png" alt="Mosaic 3 right warped">
+        <figcaption>Right, warped into the reference frame</figcaption>
+    </figure>
+    <figure class="mosaic-comparison">
+        <img src="results/mosaic3/mosaic_overwrite.png" alt="Mosaic 3 overwrite">
+        <figcaption>Naive overwrite: hard seams</figcaption>
+    </figure><figure class="mosaic-comparison">
+        <img src="results/mosaic3/mosaic_feather.png" alt="Mosaic 3 feather">
+        <figcaption>Feathering (weighted average)</figcaption>
+    </figure><figure class="mosaic-comparison">
+        <img src="results/mosaic3/mosaic_twoband.png" alt="Mosaic 3 two-band">
+        <figcaption>2-level Laplacian blend</figcaption>
+    </figure>
+    <figure class="blend-summary">
+        <img src="results/mosaic3/mosaic_twoband.png" alt="Mosaic 3 final">
+        <figcaption>Final mosaic 3</figcaption>
+    </figure>
+
+    <h3>Observations</h3>
+    <p>
+        Naive overwriting produces visible seams wherever exposure differs slightly between shots.
+        Feathering hides these seams by fading smoothly from one image to the next, but small
+        misalignments from imperfect clicks (or slight camera translation) show up as ghosting and
+        blur in the overlap. The 2-level blend keeps the smooth color transition of feathering while
+        taking fine detail from a single image, so the overlap stays sharp. 
+
+        Moreover, I also learnt that keeping my chosen points well distributed throughout the image help images align much better.
+    </p>
+    <a href="../index.html">Back to portfolio</a>
+</div>
+
+</body>
+</html>

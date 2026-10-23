@@ -1,0 +1,1 @@
+Output 1461x450: nearest 0.046s, bilinear 0.086s

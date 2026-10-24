@@ -3,19 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project 3A: Image Warping and Mosaicing</title>
+    <title>Project 3: Image Warping, Mosaicing and Autostitching</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<h1>Project 3A: Image Warping and Mosaicing</h1>
+<h1>Project 3: Image Warping, Mosaicing and Autostitching</h1>
 
 <nav class="toc">
+    <a href="#parta">Part A</a>
     <a href="#a1">A.1 Shoot the Pictures</a>
     <a href="#a2">A.2 Recover Homographies</a>
     <a href="#a3">A.3 Warp the Images</a>
     <a href="#a4">A.4 Blend into a Mosaic</a>
 </nav>
+<nav class="toc">
+    <a href="#partb">Part B</a>
+    <a href="#b1">B.1 Corners &amp; ANMS</a>
+    <a href="#b2">B.2 Feature Descriptors</a>
+    <a href="#b3">B.3 Feature Matching</a>
+    <a href="#b4">B.4 RANSAC &amp; Auto Mosaics</a>
+</nav>
+
+<p>
+    This project has two parts. In <strong>Part A</strong> I stitch photos into mosaics using
+    correspondences I clicked by hand. In <strong>Part B</strong> the same mosaics are stitched
+    automatically, by detecting, describing and matching features and estimating the homography
+    robustly with RANSAC.
+</p>
+
+<!-- ##################################################################### -->
+<h1 id="parta">Part A: Image Warping and Mosaicing</h1>
 
 <p>
     In this project I took photographs and stitched them into image mosaics. The pipeline includes:
@@ -473,8 +491,304 @@ Recovered H =
 
         Moreover, I also learnt that keeping my chosen points well distributed throughout the image help images align much better.
     </p>
-    <a href="../index.html">Back to portfolio</a>
 </div>
+
+<!-- ##################################################################### -->
+<hr>
+<h1 id="partb">Part B: Feature Matching for Autostitching</h1>
+
+<p>
+    In Part B the mosaics are stitched automatically, with no clicked
+    correspondences. In this section, I detect corners, describe each one with
+    a small normalized patch, match the patches between images, and estimate a robust homography with
+    RANSAC. That homography then goes through the same warping and blending code from Part A.
+    I used the same three photo sets as Part A, so the automatic and manual results can be compared more clearly.
+</p>
+
+<!-- ===================================================================== -->
+<h2 id="b1">B.1: Harris Corners and Adaptive Non-Maximal Suppression</h2>
+
+<div class="section">
+    <h3>Harris corner detection</h3>
+    <p>
+        I used the provided <code>harris.py</code> code at a single scale (&sigma; = 1, no sub-pixel
+        refinement). It computes the Harris corner response <code>f</code> at every pixel of the
+        grayscale image and returns all local maxima. Corners within 20 px of the border are discarded
+        so that the 40&times;40 descriptor window in B.2 always fits inside the image. Detection is run
+        on the same downscaled images as Part A (1200 px on the long side), so the automatic and manual
+        homographies are in the same coordinates.
+    </p>
+    <p>
+        Harris returns thousands of corners per image. They are heavily clustered on texture and noise,
+        and many of them are too weak or too close together to be useful.
+    </p>
+
+    <h3>Adaptive Non-Maximal Suppression (ANMS)</h3>
+    <p>
+        For a well-constrained homography the features should be spread over the whole image. ANMS
+        solves this by giving each corner <code>x<sub>i</sub></code> a
+        <strong>suppression radius</strong>: the distance to the nearest corner that is clearly
+        stronger than it.
+    </p>
+<pre>
+r_i = min_j || x_i - x_j ||    such that   f(x_i) &lt; c_robust · f(x_j),    c_robust = 0.9
+</pre>
+    <p>
+        The globally strongest corner gets an infinite radius. A corner with a large radius is the
+        strongest point in a large neighborhood, so I keep the <strong>500 corners with the largest
+        radii</strong>. The factor <code>c_robust = 0.9</code> means a neighbor only suppresses a corner
+        if it is at least about 10% stronger, so two corners of nearly equal strength don't suppress each
+        other because of noise. The radii are computed for all pairs of candidates at once with NumPy,
+        in chunks of rows to keep memory bounded.
+    </p>
+
+    <h3>Results: all Harris corners (left) vs after ANMS (right)</h3>
+    <figure class="wide-image">
+        <img src="results_b/mosaic1/corners_m1_mid.png" alt="Mosaic 1 Harris corners with and without ANMS">
+        <figcaption>Mosaic 1 (The Streets), middle image: all Harris corners (left) and the 500 kept by ANMS (right)</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic2/corners_m2_mid.png" alt="Mosaic 2 Harris corners with and without ANMS">
+        <figcaption>Mosaic 2 (Ihouse), middle image</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic3/corners_m3_mid.png" alt="Mosaic 3 Harris corners with and without ANMS">
+        <figcaption>Mosaic 3 (Patio), middle image</figcaption>
+    </figure>
+    <p>
+        Without ANMS, corners pile up wherever there is fine texture which is essentially many points throught the whole picture.
+        After ANMS the 500 remaining
+        corners cover the whole image fairly evenly, including the less textured regions, while
+        still sitting on distinctive structure. The corners that remain are much more distinctive, well-distributed, 
+        and look like something a human would select as corresponding points.
+    </p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="b2">B.2: Feature Descriptor Extraction</h2>
+
+<div class="section">
+    <p>
+        For each ANMS corner I extract a descriptor, simplified to be
+        axis-aligned (no rotation invariance) and without the wavelet transform:
+    </p>
+    <ol>
+        <li><strong>Large window.</strong> Take the 40&times;40 window centered on the corner.</li>
+        <li><strong>Blur.</strong> The grayscale image is first blurred with a Gaussian
+            (&sigma; = 2). This low-pass filter prevents aliasing when the window is subsampled.</li>
+        <li><strong>Subsample.</strong> Sample the blurred window every 5 px, giving an
+            <strong>8&times;8</strong> patch. Each of the 64 values summarizes a 5&times;5 area, so
+            the descriptor is smooth and tolerates the small (1&ndash;2 px) localization errors of
+            single-scale Harris corners.</li>
+        <li><strong>Bias/gain normalization.</strong> Subtract the patch's mean and divide by its
+            standard deviation, so the descriptor has zero mean and unit variance. This makes it
+            invariant to brightness (bias) and contrast (gain) changes between photos, e.g. when
+            the camera's exposure changes between shots.</li>
+    </ol>
+    <p>
+        Sampling the 8&times;8 patch from a larger, blurred 40&times;40 window matters: a raw 8&times;8
+        crop would contain mostly pixel noise and would change completely under a 1&ndash;2 px shift.
+    </p>
+
+    <h3>Results: sample features</h3>
+    <figure class="wide-image">
+        <img src="results_b/mosaic1/descriptors.png" alt="Extracted feature descriptors">
+        <figcaption>
+            Top: locations of six sample features on the Mosaic 1 middle image (40&times;40 windows outlined).
+            Middle: the raw 40&times;40 window around each. Bottom: the corresponding blurred, subsampled,
+            bias/gain-normalized 8&times;8 descriptor.
+        </figcaption>
+    </figure>
+    <p>
+        The 8&times;8 descriptors keep the coarse structure of each window (the direction of an
+        edge, where the bright and dark regions are) while discarding fine pixel detail. After
+        normalization, every descriptor uses the full gray range regardless of how bright or dark the
+        original window was.
+    </p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="b3">B.3: Feature Matching</h2>
+
+<div class="section">
+    <p>
+        Each descriptor is flattened to a 64-dimensional vector. For every feature in the side image I
+        compute the SSD to every feature in the reference image and find
+        its nearest neighbor and second-nearest neighbor.
+    </p>
+    <p>
+        Subsequently, I use <strong>Lowe's ratio test</strong> which states that a correct match 
+        should be much better than the
+        second-best candidate, while a wrong match is usually about as good as the second-best one.
+        A match is accepted only if
+    </p>
+<pre>
+e_1NN / e_2NN  &lt;  0.5        (e = SSD between descriptors)
+</pre>
+    <p>
+        I chose a threshold of 0.5 on the squared errors to keep most of the correct matches
+        while rejecting the incorrect ones. 
+        This is because orrect matches are concentrated at low values, 
+        while incorrect matches cluster near 1.
+        
+    </p>
+
+    <h3>Results: matched features</h3>
+    <p>
+        Each line connects a feature in the side image (left) to its match in the reference image
+        (right). Each match has its own color.
+    </p>
+    <figure class="wide-image">
+        <img src="results_b/mosaic1/matches_m1_left.png" alt="Mosaic 1 left-middle matches">
+        <figcaption>Mosaic 1: left &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic1/matches_m1_right.png" alt="Mosaic 1 right-middle matches">
+        <figcaption>Mosaic 1: right &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic2/matches_m2_left.png" alt="Mosaic 2 left-middle matches">
+        <figcaption>Mosaic 2: left &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic2/matches_m2_right.png" alt="Mosaic 2 right-middle matches">
+        <figcaption>Mosaic 2: right &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic3/matches_m3_left.png" alt="Mosaic 3 left-middle matches">
+        <figcaption>Mosaic 3: left &harr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic3/matches_m3_right.png" alt="Mosaic 3 right-middle matches">
+        <figcaption>Mosaic 3: right &harr; middle</figcaption>
+    </figure>
+    <p>
+        Most matches run roughly parallel, which is what a consistent camera rotation produces.
+        The few lines that cross the others at steep angles are incorrect matches that passed the
+        ratio test. By observing the matches, the wrong matches often come from visually similar regions, 
+        for instance repeated patterns or similar-looking textures.
+        
+    </p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="b4">B.4: RANSAC and Automatic Mosaics</h2>
+
+<div class="section">
+    <h3>4-point RANSAC</h3>
+    <p>
+        The RANSAC algorithm is as follows:
+    </p>
+    <ol>
+        <li>Randomly pick <strong>4 matches</strong> and compute the exact homography through them with
+            <code>computeH</code> from Part A.</li>
+        <li>Map every matched point from the side image through this <code>H</code> and measure how far
+            it lands from its partner in the reference image. Matches within <strong>3 px</strong> are
+            <strong>inliers</strong>.</li>
+        <li>Repeat 5000 times and keep the largest inlier set. Degenerate samples (for example, nearly
+            collinear points) are skipped.</li>
+        <li>Refit <code>H</code> with least squares on <strong>all</strong> inliers, recompute the
+            inliers with the refit <code>H</code>, and refit once more.</li>
+    </ol>
+
+    <h3>Results: RANSAC inliers and outliers</h3>
+    <p><strong>Green lines are inliers kept by RANSAC. Red lines are rejected outliers.</strong></p>
+    <figure class="wide-image">
+        <img src="results_b/mosaic1/ransac_m1_left.png" alt="Mosaic 1 left RANSAC inliers">
+        <figcaption>Mosaic 1: left &rarr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic1/ransac_m1_right.png" alt="Mosaic 1 right RANSAC inliers">
+        <figcaption>Mosaic 1: right &rarr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic2/ransac_m2_left.png" alt="Mosaic 2 left RANSAC inliers">
+        <figcaption>Mosaic 2: left &rarr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic2/ransac_m2_right.png" alt="Mosaic 2 right RANSAC inliers">
+        <figcaption>Mosaic 2: right &rarr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic3/ransac_m3_left.png" alt="Mosaic 3 left RANSAC inliers">
+        <figcaption>Mosaic 3: left &rarr; middle</figcaption>
+    </figure>
+    <figure class="wide-image">
+        <img src="results_b/mosaic3/ransac_m3_right.png" alt="Mosaic 3 right RANSAC inliers">
+        <figcaption>Mosaic 3: right &rarr; middle</figcaption>
+    </figure>
+
+    <table>
+        <thead>
+            <tr><th>Pair</th><th>Ratio-test matches</th><th>RANSAC inliers</th><th>Auto H on manual points</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Mosaic 1: left &rarr; middle</td><td>261</td><td>232</td><td>4.32 px</td></tr>
+            <tr><td>Mosaic 1: right &rarr; middle</td><td>200</td><td>171</td><td>4.27 px</td></tr>
+            <tr><td>Mosaic 2: left &rarr; middle</td><td>276</td><td>242</td><td>4.26 px</td></tr>
+            <tr><td>Mosaic 2: right &rarr; middle</td><td>189</td><td>127</td><td>3.58 px</td></tr>
+            <tr><td>Mosaic 3: left &rarr; middle</td><td>110</td><td>89</td><td>3.99 px</td></tr>
+            <tr><td>Mosaic 3: right &rarr; middle</td><td>136</td><td>112</td><td>4.41 px</td></tr>
+        </tbody>
+    </table>
+    <p class="table-note">
+        The last column maps my manually chosen points from Part A through the automatic homography and
+        reports the mean distance to the clicked targets. 
+    </p>
+
+    <h3>Manual vs automatic mosaics</h3>
+    <p>
+        Both versions use the same pipeline from part A (middle image as reference, bilinear inverse warping,
+        2-level Laplacian blending) but differ in how the homographies are obtained: my manually chosen
+        correspondences or RANSAC on the automatically matched features.
+    </p>
+
+    <!-- ---------------- Mosaic 1 ---------------- -->
+    <h3>Mosaic 1: The Streets</h3>
+    <figure class="blend-summary">
+        <img src="results_b/mosaic1/mosaic_manual.png" alt="Mosaic 1 manual">
+        <figcaption>Manual (Part A clicked points)</figcaption>
+    </figure>
+    <figure class="blend-summary">
+        <img src="results_b/mosaic1/mosaic_auto.png" alt="Mosaic 1 automatic">
+        <figcaption>Automatic (Harris + ANMS + descriptors + RANSAC)</figcaption>
+    </figure>
+
+    <!-- ---------------- Mosaic 2 ---------------- -->
+    <h3>Mosaic 2: Ihouse</h3>
+    <figure class="blend-summary">
+        <img src="results_b/mosaic2/mosaic_manual.png" alt="Mosaic 2 manual">
+        <figcaption>Manual (Part A clicked points)</figcaption>
+    </figure>
+    <figure class="blend-summary">
+        <img src="results_b/mosaic2/mosaic_auto.png" alt="Mosaic 2 automatic">
+        <figcaption>Automatic (Harris + ANMS + descriptors + RANSAC)</figcaption>
+    </figure>
+
+    <!-- ---------------- Mosaic 3 ---------------- -->
+    <h3>Mosaic 3: Patio</h3>
+    <figure class="blend-summary">
+        <img src="results_b/mosaic3/mosaic_manual.png" alt="Mosaic 3 manual">
+        <figcaption>Manual (Part A clicked points)</figcaption>
+    </figure>
+    <figure class="blend-summary">
+        <img src="results_b/mosaic3/mosaic_auto.png" alt="Mosaic 3 automatic">
+        <figcaption>Automatic (Harris + ANMS + descriptors + RANSAC)</figcaption>
+    </figure>
+
+    <h3>Observations</h3>
+    <p>
+        The automatic mosaics are built from many more correspondences than the 8&ndash;9 I clicked by
+        hand, and every one of them is checked against the others by RANSAC. Clicking errors average out
+        less well with few points, and a single bad click (like the 5.6 px point in Part A) pulls the
+        whole least-squares fit. With automatic matching, inconsistent points are simply rejected.
+        From mosaic 2, we can see that the automatic version is much sharper especially in the grass patch. 
+        It was hard finding corresponding points in the grass patch manually but automatic matching handled it well.
+    </p>
+
+</div>
+
+<p><a href="../index.html">Back to portfolio</a></p>
 
 </body>
 </html>
